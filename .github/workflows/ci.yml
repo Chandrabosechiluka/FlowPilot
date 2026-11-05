@@ -7,9 +7,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -21,5 +22,5 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run tests (sandbox only; the live GarageFlow contract test is skipped here)
+      - name: Run tests
         run: uv run pytest -v
