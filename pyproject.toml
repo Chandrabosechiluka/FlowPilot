@@ -1,0 +1,32 @@
+[project]
+name = "flowpilot"
+version = "0.1.0"
+description = "An AI support and integration copilot deployed into an auto-service business that runs GarageFlow."
+readme = "README.md"
+authors = [{ name = "Chandra Bose Chiluka" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",          # Model Context Protocol SDK (MCPServer, Client)
+    "httpx2>=2.13,<3",      # async HTTP client (the one mcp 2.x itself uses)
+    "pydantic>=2.13,<3",    # typed models for GarageFlow's JSON
+    "python-dotenv>=1.2",   # reads .env in development
+    "starlette>=1.7",       # the fake GarageFlow sandbox (FastAPI is built on Starlette)
+    "uvicorn>=0.54",        # runs the sandbox and the MCP server over HTTP
+    "tzdata>=2026.6",
+]
+
+[project.scripts]
+flowpilot-mcp = "flowpilot.mcp_server.__main__:main"
+flowpilot-sandbox = "flowpilot.sandbox.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=9", "anyio>=4.15"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
