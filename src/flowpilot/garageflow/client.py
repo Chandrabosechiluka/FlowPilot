@@ -49,6 +49,7 @@ from flowpilot.garageflow.models import (
     ServiceType,
     Technician,
     UserRole,
+    Vehicle,
     WaitlistEntry,
     WaitlistStatus,
 )
@@ -274,6 +275,30 @@ class GarageFlowClient:
 
     async def get_customer(self, customer_id: UUID) -> Customer:
         return await self._get(f"/api/customers/{customer_id}", Customer)
+
+    async def create_customer(self, *, full_name: str, email: str, phone: str) -> Customer:
+        """POST /api/customers (Admin or Advisor). Never retried automatically: on a network error the
+        customer may or may not exist, so the caller must look it up by email before trying again.
+        A duplicate email is HTTP 409 (GarageFlowRequestError with status 409)."""
+        body = await self._request("POST", "/api/customers", json={"fullName": full_name, "email": email, "phone": phone})
+        return Customer.model_validate(body)
+
+    async def add_vehicle(
+        self, customer_id: UUID, *, make: str, model: str, year: int, registration_number: str
+    ) -> Vehicle:
+        """POST /api/customers/{id}/vehicles. A registration already on this customer is HTTP 400."""
+        body = await self._request(
+            "POST",
+            f"/api/customers/{customer_id}/vehicles",
+            json={"make": make, "model": model, "year": year, "registrationNumber": registration_number},
+        )
+        return Vehicle.model_validate(body)
+
+    async def find_customer_by_email(self, email: str) -> Customer | None:
+        """GarageFlow's search matches parts of names and emails, so filter for the exact email here."""
+        wanted = email.strip().lower()
+        page = await self.list_customers(search=wanted, page_size=100)
+        return next((c for c in page.items if c.email.lower() == wanted), None)
 
     async def list_service_types(self) -> list[ServiceType]:
         return await self._get("/api/service-types", list[ServiceType])

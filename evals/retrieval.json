@@ -1,0 +1,25 @@
+{
+  "description": "Questions a support engineer asks, and which knowledge documents should answer them. 'expected' lists document ids; a result counts as correct if any of them is returned. 'kind' is 'wording' when the question shares words with the answer, 'paraphrase' when it uses different words (needs a real embedding model).",
+  "cases": [
+    {"id": "r01", "kind": "wording", "query": "appointments still booked hours after their start time, no-show not marked", "expected": ["rb-maintenance-jobs", "T-1012"]},
+    {"id": "r02", "kind": "wording", "query": "Maintenance job failed SqlException Execution Timeout Expired", "expected": ["rb-maintenance-jobs", "T-1012"]},
+    {"id": "r03", "kind": "wording", "query": "waitlist offer expired but still shows Offered", "expected": ["rb-maintenance-jobs", "T-1033"]},
+    {"id": "r04", "kind": "wording", "query": "too many requests error on the login screen", "expected": ["rb-login-failures", "T-1018"]},
+    {"id": "r05", "kind": "wording", "query": "all users logged out after a deployment, 401 everywhere", "expected": ["rb-login-failures", "T-1021"]},
+    {"id": "r06", "kind": "wording", "query": "booking from the website shows at the wrong hour", "expected": ["rb-time-zones", "T-1025"]},
+    {"id": "r07", "kind": "wording", "query": "no free slots for brake inspection", "expected": ["rb-booking-problems", "T-1030"]},
+    {"id": "r08", "kind": "wording", "query": "409 conflict when booking an appointment", "expected": ["rb-booking-problems", "T-1049"]},
+    {"id": "r09", "kind": "wording", "query": "cannot cancel appointment, business rule violated", "expected": ["rb-booking-problems", "T-1041"]},
+    {"id": "r10", "kind": "wording", "query": "health db returns 503 database not reachable", "expected": ["rb-database-unreachable", "rb-health-and-logs"]},
+    {"id": "r11", "kind": "wording", "query": "duplicate customers after importing from the old system", "expected": ["rb-data-migration", "T-1037"]},
+    {"id": "r12", "kind": "wording", "query": "how to run the maintenance jobs now to catch up", "expected": ["rb-maintenance-jobs"]},
+    {"id": "r13", "kind": "wording", "query": "what to include when escalating to engineering", "expected": ["rb-triage-escalation"]},
+    {"id": "r14", "kind": "wording", "query": "where are the API logs and how to find a request by correlation id", "expected": ["rb-health-and-logs", "rb-triage-escalation"]},
+    {"id": "r15", "kind": "paraphrase", "query": "people who skipped their slot are not being marked absent", "expected": ["rb-maintenance-jobs", "T-1012"]},
+    {"id": "r16", "kind": "paraphrase", "query": "the DB is down and nothing works", "expected": ["rb-database-unreachable", "T-1044"]},
+    {"id": "r17", "kind": "paraphrase", "query": "staff kicked out of the app after last night's release", "expected": ["rb-login-failures", "T-1021"]},
+    {"id": "r18", "kind": "paraphrase", "query": "server ran out of storage space", "expected": ["rb-database-unreachable", "T-1044"]},
+    {"id": "r19", "kind": "paraphrase", "query": "mechanic qualified for the job is missing so nothing can be scheduled", "expected": ["rb-booking-problems", "T-1030"]},
+    {"id": "r20", "kind": "paraphrase", "query": "same person appears twice after moving data across", "expected": ["rb-data-migration", "T-1037"]}
+  ]
+}

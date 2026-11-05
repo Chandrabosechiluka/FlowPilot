@@ -24,3 +24,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -v
+
+      - name: Retrieval quality gate
+        run: uv run flowpilot-kb eval

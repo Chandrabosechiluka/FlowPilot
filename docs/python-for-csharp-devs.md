@@ -30,6 +30,12 @@ You already know the ideas. This page maps them. Read it next to the code.
 | Moq | small fakes (`SleepRecorder`, `MockTransport`) | `tests/` |
 | `ILogger<T>` | `logging.getLogger("flowpilot.mcp")` | everywhere |
 | ASP.NET Core minimal API | Starlette (FastAPI sits on top of it) | `sandbox/app.py` |
+| `interface IVectorStore` | `class VectorStore(Protocol)`: any class with those methods fits ("duck typing", checked by pyright) | `knowledge/stores.py` |
+| factory keyed by name | a dict of classes filled by a `@register("name")` decorator | `migration/connectors.py` |
+| `switch` expression | `match provider: case "hash": ...` | `knowledge/embeddings.py` |
+| LINQ `GroupBy` / `OrderBy` | dict of groups + `sorted(key=...)`, or list comprehensions | `logs/store.py` |
+| `double[]` maths | `numpy` arrays: `matrix @ vector` is a matrix product | `knowledge/stores.py` |
+| `File.Replace` (atomic) | write a temp file, then `os.replace` | `migration/applier.py` |
 
 ## Five Python habits that will look odd at first
 

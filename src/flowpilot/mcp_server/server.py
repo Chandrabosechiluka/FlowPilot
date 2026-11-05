@@ -37,7 +37,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from flowpilot.config import Settings, load_settings
+from flowpilot.config import KnowledgeSettings, Settings, load_knowledge_settings, load_settings
 from flowpilot.garageflow import (
     GarageFlowAuthError,
     GarageFlowClient,
@@ -47,6 +47,8 @@ from flowpilot.garageflow import (
     GarageFlowUnavailable,
 )
 from flowpilot.garageflow.models import AppointmentStatus, Customer, WaitlistStatus
+from flowpilot.knowledge import KnowledgeBase
+from flowpilot.logs import LogStore
 from flowpilot.mcp_server import views
 from flowpilot.mcp_server.views import Catalog
 
@@ -64,6 +66,8 @@ customers, technicians, bays, availability, waitlist and audit trail).
 - Times are shown in the shop's local time zone; *_utc fields are UTC.
 - `flags` on a record are rule-based warnings computed by FlowPilot: treat them as evidence.
 - Every error includes a correlationId: quote it when reporting a problem to engineers.
+- search_knowledge finds runbooks and past tickets: cite their `citation` when you rely on them.
+- search_logs / summarize_log_errors read GarageFlow's API logs (by correlation ID, level, text, time).
 - These tools cannot change anything. If a fix needs a change, describe it for a human to approve."""
 
 P = ParamSpec("P")
@@ -77,6 +81,8 @@ class _Runtime:
         self.settings = settings
         self.tz = ZoneInfo(settings.shop_timezone)
         self._client = client
+        self.knowledge: KnowledgeBase | None = None
+        self.logs: LogStore | None = None
         self._catalog: Catalog | None = None
         self._catalog_loaded_at = 0.0
         self.now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
@@ -170,26 +176,54 @@ def _normalise_registration(value: str) -> str:
     return re.sub(r"[\s-]", "", value).upper()
 
 
-def create_server(*, settings: Settings | None = None, client: GarageFlowClient | None = None) -> MCPServer:
+def create_server(
+    *,
+    settings: Settings | None = None,
+    client: GarageFlowClient | None = None,
+    knowledge: KnowledgeBase | None = None,
+    logs: LogStore | None = None,
+    knowledge_settings: KnowledgeSettings | None = None,
+) -> MCPServer:
     """Build the server.
 
-    - Tests pass an already-open `client` (pointed at the sandbox) and own its lifetime.
-    - In production nothing is passed: settings come from the environment and the lifespan opens
-      the client when the server starts and closes it when the server stops.
+    - Tests pass an already-open `client` (pointed at the sandbox), an ingested `knowledge` base and a
+      `logs` store, and own their lifetimes.
+    - In production nothing is passed: settings come from the environment, and the lifespan opens the
+      client, builds and ingests the knowledge base, and opens the log file when the server starts.
     """
     runtime = _Runtime(settings or (client and client._settings) or load_settings(), client)  # noqa: SLF001
+    runtime.knowledge, runtime.logs = knowledge, logs
+    testing = client is not None
 
     @asynccontextmanager
     async def lifespan(_: MCPServer) -> AsyncIterator[None]:
-        if client is not None:
+        if testing:
             yield
             return
+        from pathlib import Path
+
+        from flowpilot.knowledge.factory import build_knowledge_base
+
+        ks = knowledge_settings or load_knowledge_settings()
+        kb: KnowledgeBase | None = None
+        try:
+            kb = build_knowledge_base(ks)
+            report = await kb.ingest(Path(ks.knowledge_dir))
+            log.info("Knowledge base ready: %s", report.summary())
+            runtime.knowledge = kb
+        except Exception as exc:  # noqa: BLE001 - the GarageFlow tools still work without it
+            log.error("Knowledge base not available: %s", exc)
+        if ks.log_file:
+            runtime.logs = LogStore(Path(ks.log_file))
+            log.info("Reading GarageFlow logs from %s", ks.log_file)
         async with GarageFlowClient(runtime.settings) as gf:
             runtime.attach(gf)
             try:
                 yield
             finally:
                 runtime.attach(None)
+                if kb is not None:
+                    await kb.store.close()
 
     server = MCPServer(
         name="flowpilot-garageflow",
@@ -381,6 +415,10 @@ def create_server(*, settings: Settings | None = None, client: GarageFlowClient 
             items=[views.audit_view(e, runtime.tz) for e in result.items],
         )
 
+    from flowpilot.mcp_server.knowledge_tools import register_knowledge_tools
+
+    register_knowledge_tools(server, runtime)
+
     # ---------------------------------------------------------- prompts
 
     @server.prompt(title="Triage a support ticket")
@@ -391,9 +429,11 @@ def create_server(*, settings: Settings | None = None, client: GarageFlowClient 
             "using only the FlowPilot tools, which are read-only.\n\n"
             f"Ticket:\n{ticket}\n\n"
             "Steps: 1) check_garageflow_health. 2) Find the records involved (find_customers, list_appointments, "
-            "get_appointment). 3) Read their history and flags. 4) Answer with: what is happening, the evidence "
-            "(tool results, with ids and correlationIds), the likely root cause, and the fix you recommend. Mark "
-            "anything that needs a change to data as 'needs human approval'. If the evidence is not enough, say so."
+            "get_appointment). 3) Read their history and flags. 4) Check the logs (summarize_log_errors, then "
+            "search_logs). 5) Search runbooks and past tickets (search_knowledge) for the symptom and the errors. "
+            "6) Answer with: what is happening, the evidence (tool results, with ids, correlationIds and citations), "
+            "the likely root cause, and the fix you recommend. Mark anything that needs a change to data as "
+            "'needs human approval'. If the evidence is not enough, say what a human must check."
         )
 
     return server

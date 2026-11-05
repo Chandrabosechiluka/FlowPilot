@@ -23,7 +23,8 @@ Add FlowPilot under `mcpServers` (adjust the folder):
       "env": {
         "GARAGEFLOW_BASE_URL": "http://localhost:5090",
         "GARAGEFLOW_EMAIL": "advisor@garageflow.local",
-        "GARAGEFLOW_PASSWORD": "Garage@12345"
+        "GARAGEFLOW_PASSWORD": "Garage@12345",
+        "GARAGEFLOW_LOG_FILE": "F:\\projects\\FlowPilot\\sandbox-logs\\garageflow.log"
       }
     }
   }
@@ -37,6 +38,12 @@ Restart Claude Desktop. The tools appear in the tools menu. Try:
 - "Find the customer with car TS07 HJ 9012 and tell me about their visit today."
 - Use the **triage_ticket** prompt with: "Shop manager says yesterday's no-shows were handled but
   today's late customers are still showing as Booked."
+- (Week 2) "What errors are in the GarageFlow logs in the last 4 hours, and since when?"
+- (Week 2) "Is there a runbook or a past ticket for that error? What did we do last time?"
+
+The knowledge base is indexed when the server starts (a second with the default `hash` embedder).
+The sandbox writes its logs to `sandbox-logs\garageflow.log` in the folder you start it from, so start
+it from `F:\projects\FlowPilot`.
 
 If `uv` is not found, put its full path in `command` (run `where.exe uv` to find it).
 

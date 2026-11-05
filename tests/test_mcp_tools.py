@@ -19,6 +19,9 @@ EXPECTED_TOOLS = {
     "check_availability",
     "list_waitlist",
     "search_audit_log",
+    "search_knowledge",
+    "search_logs",
+    "summarize_log_errors",
 }
 
 
@@ -189,3 +192,61 @@ async def test_triage_prompt(mcp):
     text = prompt.messages[0].content.text
     assert "Branch 3 says bookings are stuck" in text
     assert "needs human approval" in text
+
+
+# ------------------------------------------------------------ Week 2 tools
+
+
+async def test_search_knowledge_returns_cited_passages(mcp):
+    result = await ok(mcp, "search_knowledge", query="appointments still booked after start time, no-show not marked")
+    top = result["hits"][0]
+    assert top["doc_id"] in {"rb-maintenance-jobs", "T-1012"}
+    assert top["citation"].endswith(")") and ".md (" in top["citation"]
+    assert top["matched_by"] in {"meaning and keywords", "meaning", "keywords"}
+    assert result["embedder"] == "hash:512"
+
+
+async def test_search_knowledge_can_filter_to_tickets(mcp):
+    result = await ok(mcp, "search_knowledge", query="login too many attempts", doc_type="ticket", k=3)
+    assert result["hits"] and all(h["doc_type"] == "ticket" for h in result["hits"])
+
+
+async def test_summarize_log_errors_shows_the_incident(mcp):
+    summary = await ok(mcp, "summarize_log_errors", since_minutes=240)
+    top = summary["groups"][0]
+    assert top["source"] == "MaintenanceWorker" and top["level"] == "error"
+    assert top["count"] >= 180
+    assert "Execution Timeout Expired" in top["example"]
+    assert top["first_seen_local"].startswith("2026-11-04 08:")  # about 3h10m before 12:00 IST
+
+
+async def test_search_logs_by_text_and_source(mcp):
+    result = await ok(mcp, "search_logs", text="offer expiry", min_level="error", limit=3)
+    assert result["total_matched"] >= 180 and result["returned"] == 3
+    assert result["lines"][0]["source"] == "MaintenanceWorker"
+    assert "IST" in result["log_covers"]
+
+
+async def test_search_logs_follows_a_flowpilot_correlation_id(mcp, sandbox_state):
+    await ok(mcp, "get_shop_catalog")
+    correlation_id = next(cid for m, p, cid in reversed(sandbox_state.requests_seen) if p == "/api/bays")
+    result = await ok(mcp, "search_logs", correlation_id=correlation_id)
+    assert result["total_matched"] == 1
+    assert result["lines"][0]["message"].startswith("HTTP GET /api/bays responded 200")
+
+
+async def test_log_tools_explain_when_no_log_file_is_configured(gf, knowledge):
+    from mcp import Client
+
+    from flowpilot.mcp_server import create_server
+
+    server = create_server(client=gf, knowledge=knowledge, logs=None)
+    async with Client(server) as client:
+        result = await client.call_tool("summarize_log_errors", {})
+    assert result.is_error and "GARAGEFLOW_LOG_FILE" in result.content[0].text
+
+
+async def test_triage_prompt_mentions_the_new_tools(mcp):
+    prompt = await mcp.get_prompt("triage_ticket", {"ticket": "x"})
+    text = prompt.messages[0].content.text
+    assert "summarize_log_errors" in text and "search_knowledge" in text

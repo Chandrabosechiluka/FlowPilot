@@ -22,8 +22,10 @@ class GarageFlowError(Exception):
         detail: str | None = None,
         correlation_id: str | None = None,
         path: str | None = None,
+        field_errors: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__(message)
+        self.field_errors = field_errors or {}
         self.status = status
         self.title = title
         self.detail = detail
@@ -61,22 +63,31 @@ class GarageFlowRequestError(GarageFlowError):
 def from_problem(status: int, body: Any, *, path: str, fallback_correlation_id: str | None) -> GarageFlowError:
     """Turn GarageFlow's ProblemDetails body ({title, detail, status, correlationId}) into an exception."""
     title = detail = correlation_id = None
+    field_errors: dict[str, list[str]] = {}
     if isinstance(body, dict):
         title = body.get("title")
         detail = body.get("detail")
         correlation_id = body.get("correlationId")
+        if isinstance(body.get("errors"), dict):  # ValidationProblemDetails from [ApiController]
+            field_errors = {str(k): [str(m) for m in v] for k, v in body["errors"].items() if isinstance(v, list)}
     correlation_id = correlation_id or fallback_correlation_id
 
     message = title or f"GarageFlow returned HTTP {status}"
     if detail:
         # GarageFlow in Development puts a stack trace here; keep the first line only.
         message = f"{message}: {detail.splitlines()[0][:300]}"
+    if field_errors:
+        message += " (" + "; ".join(f"{k}: {' '.join(v)}" for k, v in field_errors.items()) + ")"
 
-    kwargs = dict(status=status, title=title, detail=detail, correlation_id=correlation_id, path=path)
     if status in (401, 403):
-        return GarageFlowAuthError(message, **kwargs)
-    if status == 404:
-        return GarageFlowNotFound(message, **kwargs)
-    if status == 429 or status >= 500:
-        return GarageFlowUnavailable(message, **kwargs)
-    return GarageFlowRequestError(message, **kwargs)
+        cls: type[GarageFlowError] = GarageFlowAuthError
+    elif status == 404:
+        cls = GarageFlowNotFound
+    elif status == 429 or status >= 500:
+        cls = GarageFlowUnavailable
+    else:
+        cls = GarageFlowRequestError
+    return cls(
+        message, status=status, title=title, detail=detail, correlation_id=correlation_id, path=path,
+        field_errors=field_errors,
+    )

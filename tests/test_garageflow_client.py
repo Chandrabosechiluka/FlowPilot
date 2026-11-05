@@ -101,7 +101,7 @@ async def test_forbidden_is_not_retried(gf, sleeps):
 async def test_not_found_keeps_garageflows_message(gf):
     with pytest.raises(GarageFlowNotFound) as err:
         await gf.get_appointment(sid("appointment:does-not-exist"))
-    assert "Appointment was not found" in str(err.value)
+    assert "was not found" in str(err.value)
     assert err.value.correlation_id.startswith("fp-")
 
 

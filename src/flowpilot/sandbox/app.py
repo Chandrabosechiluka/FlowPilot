@@ -17,9 +17,12 @@ request/response style FastAPI uses.
 
 from __future__ import annotations
 
+import re
 import secrets
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -29,6 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from flowpilot.sandbox.logs import RequestLogger, write_history
 from flowpilot.sandbox.seed import SandboxData, build_seed
 
 PASSWORD = "Garage@12345"  # same as GarageFlow's DbSeeder.DevPassword
@@ -53,6 +57,7 @@ class SandboxState:
     tokens: dict[str, tuple[str, datetime]] = field(default_factory=dict)  # token -> (email, expires)
     token_lifetime: timedelta = timedelta(hours=1)
     requests_seen: list[tuple[str, str, str | None]] = field(default_factory=list)  # (method, path, correlationId)
+    request_logger: RequestLogger | None = None
 
     def revoke_all_tokens(self) -> None:
         self.tokens.clear()
@@ -151,6 +156,23 @@ class SandboxMiddleware:
         path = request.url.path
         state.requests_seen.append((request.method, path, request.headers.get("X-Correlation-ID")))
 
+        if state.request_logger is not None and path.startswith("/api/"):
+            started = time.perf_counter()
+            status_holder = {"status": 500}
+            logger, inner_send = state.request_logger, send
+
+            async def logging_send(message: Any) -> None:  # sees the status code on its way out
+                if message["type"] == "http.response.start":
+                    status_holder["status"] = message["status"]
+                elif message["type"] == "http.response.body" and not message.get("more_body"):
+                    logger.log(
+                        request.method, path, status_holder["status"],
+                        int((time.perf_counter() - started) * 1000), request.state.correlation_id,
+                    )
+                await inner_send(message)
+
+            send = logging_send
+
         if path.startswith("/api/"):
             if state.faults.delay_seconds:
                 await anyio.sleep(state.faults.delay_seconds)
@@ -175,7 +197,7 @@ def requires(roles: set[str]):
             if user is None:
                 return _problem(request, 401, "Unauthorized")
             if user["role"] not in roles:
-                return _problem(request, 403, "Forbidden", f"This needs one of the roles: {', '.join(sorted(roles))}.")
+                return _problem(request, 403, "Forbidden")  # GarageFlow's 403 has no detail either
             return await handler(request)
 
         return wrapped
@@ -222,6 +244,8 @@ async def login(request: Request) -> Response:
 
 async def me(request: Request) -> Response:
     user = _user(request)
+    if user is None:
+        return _problem(request, 401, "Unauthorized")
     return _json(request, {"email": user["email"], "displayName": user["displayName"], "role": user["role"]})
 
 
@@ -243,7 +267,7 @@ async def list_appointments(request: Request) -> Response:
 async def get_appointment(request: Request) -> Response:
     appointment = _state(request).data.appointments.get(request.path_params["id"])
     if appointment is None:
-        return _problem(request, 404, "Not found", "Appointment was not found.")
+        return _problem(request, 404, "Resource not found", f"Appointment with id {request.path_params['id']} was not found.")
     return _json(request, appointment)
 
 
@@ -251,7 +275,7 @@ async def get_appointment(request: Request) -> Response:
 async def appointment_history(request: Request) -> Response:
     appointment_id = request.path_params["id"]
     if appointment_id not in _state(request).data.appointments:
-        return _problem(request, 404, "Not found", "Appointment was not found.")
+        return _problem(request, 404, "Resource not found", f"Appointment with id {request.path_params['id']} was not found.")
     rows = [a for a in _state(request).data.audit if a["entityId"] == appointment_id]
     return _json(request, sorted(rows, key=lambda a: (a["timestampUtc"], a["id"])))
 
@@ -270,8 +294,89 @@ async def list_customers(request: Request) -> Response:
 async def get_customer(request: Request) -> Response:
     customer = _state(request).data.customers.get(request.path_params["id"])
     if customer is None:
-        return _problem(request, 404, "Not found", "Customer was not found.")
+        return _problem(request, 404, "Resource not found", f"Customer with id {request.path_params['id']} was not found.")
     return _json(request, customer)
+
+
+def _validation_problem(request: Request, errors: dict[str, list[str]]) -> JSONResponse:
+    """The shape [ApiController] returns for invalid input (ValidationProblemDetails)."""
+    body = {
+        "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+        "title": "One or more validation errors occurred.",
+        "status": 400,
+        "errors": errors,
+        "correlationId": request.state.correlation_id,
+    }
+    response = JSONResponse(body, status_code=400, media_type="application/problem+json")
+    response.headers["X-Correlation-ID"] = request.state.correlation_id
+    return response
+
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+$")  # about as lenient as .NET's [EmailAddress]
+
+
+def _normalise_registration(value: str) -> str:
+    return value.replace(" ", "").replace("-", "").upper()
+
+
+@requires(ADMIN_OR_ADVISOR)
+async def create_customer(request: Request) -> Response:
+    body = await request.json()
+    errors: dict[str, list[str]] = {}
+    name, email, phone = (str(body.get(k) or "").strip() for k in ("fullName", "email", "phone"))
+    if not name:
+        errors["FullName"] = ["The FullName field is required."]
+    elif len(name) > 200:
+        errors["FullName"] = ["The field FullName must be a string with a maximum length of 200."]
+    if not email:
+        errors["Email"] = ["The Email field is required."]
+    elif not _EMAIL.match(email) or len(email) > 256:
+        errors["Email"] = ["The Email field is not a valid e-mail address."]
+    if not phone:
+        errors["Phone"] = ["The Phone field is required."]
+    elif len(phone) > 30:
+        errors["Phone"] = ["The field Phone must be a string with a maximum length of 30."]
+    if errors:
+        return _validation_problem(request, errors)
+    data = _state(request).data
+    email = email.lower()
+    if any(c["email"] == email for c in data.customers.values()):
+        return _problem(request, 409, "Conflict", f"A customer with email {email} already exists.")
+    customer = {"id": str(uuid4()), "fullName": name, "email": email, "phone": phone, "vehicles": []}
+    data.customers[customer["id"]] = customer
+    response = _json(request, customer, status=201)
+    response.headers["Location"] = f"/api/customers/{customer['id']}"
+    return response
+
+
+@requires(ADMIN_OR_ADVISOR)
+async def add_vehicle(request: Request) -> Response:
+    data = _state(request).data
+    customer = data.customers.get(request.path_params["id"])
+    if customer is None:
+        return _problem(request, 404, "Resource not found", f"Customer with id {request.path_params['id']} was not found.")
+    body = await request.json()
+    errors: dict[str, list[str]] = {}
+    make, model, reg = (str(body.get(k) or "").strip() for k in ("make", "model", "registrationNumber"))
+    for field_name, value, limit in (("Make", make, 100), ("Model", model, 100), ("RegistrationNumber", reg, 20)):
+        if not value:
+            errors[field_name] = [f"The {field_name} field is required."]
+        elif len(value) > limit:
+            errors[field_name] = [f"The field {field_name} must be a string with a maximum length of {limit}."]
+    year = body.get("year")
+    if not isinstance(year, int) or not 1980 <= year <= 2100:
+        errors["Year"] = ["The field Year must be between 1980 and 2100."]
+    if errors:
+        return _validation_problem(request, errors)
+    if year > datetime.now(timezone.utc).year + 1:
+        return _problem(request, 400, "Business rule violated", "Vehicle year is out of range.")
+    normalised = _normalise_registration(reg)
+    if any(v["registrationNumber"] == normalised for v in customer["vehicles"]):
+        return _problem(request, 400, "Business rule violated", f"Vehicle {normalised} is already registered for this customer.")
+    vehicle = {"id": str(uuid4()), "customerId": customer["id"], "make": make, "model": model, "year": year,
+               "registrationNumber": normalised}
+    customer["vehicles"].append(vehicle)
+    return _json(request, vehicle, status=201)
 
 
 async def service_types(request: Request) -> Response:
@@ -298,7 +403,7 @@ async def availability(request: Request) -> Response:
     data = _state(request).data
     service = data.service_types.get(str(service_type_id))
     if service is None:
-        return _problem(request, 404, "Not found", "Service type was not found.")
+        return _problem(request, 404, "Resource not found", f"ServiceType with id {service_type_id} was not found.")
     try:
         day = datetime.strptime(q["date"], "%Y-%m-%d").date()
     except ValueError:
@@ -343,8 +448,10 @@ async def set_faults(request: Request) -> Response:
     return _json(request, faults.__dict__)
 
 
-def create_app(*, now: datetime | None = None) -> Starlette:
-    """`now` pins the seed data to a fixed moment so tests are repeatable."""
+def create_app(*, now: datetime | None = None, log_path: Path | None = None) -> Starlette:
+    """`now` pins the seed data to a fixed moment so tests are repeatable.
+    With `log_path`, a few hours of GarageFlow-style log history are written there, and every request
+    the sandbox serves is appended, like GarageFlow's console log saved with `docker logs -t`."""
     app = Starlette(
         routes=[
             Route("/health", health),
@@ -354,8 +461,10 @@ def create_app(*, now: datetime | None = None) -> Starlette:
             Route("/api/appointments", list_appointments),
             Route("/api/appointments/{id}", get_appointment),
             Route("/api/appointments/{id}/history", appointment_history),
-            Route("/api/customers", list_customers),
+            Route("/api/customers", list_customers, methods=["GET"]),
+            Route("/api/customers", create_customer, methods=["POST"]),
             Route("/api/customers/{id}", get_customer),
+            Route("/api/customers/{id}/vehicles", add_vehicle, methods=["POST"]),
             Route("/api/service-types", service_types),
             Route("/api/technicians", technicians),
             Route("/api/bays", bays),
@@ -365,6 +474,10 @@ def create_app(*, now: datetime | None = None) -> Starlette:
             Route("/_sandbox/faults", set_faults, methods=["POST"]),
         ]
     )
-    app.state.sandbox = SandboxState(data=build_seed(now or datetime.now(timezone.utc)))
+    moment = now or datetime.now(timezone.utc)
+    app.state.sandbox = SandboxState(data=build_seed(moment))
+    if log_path is not None:
+        write_history(log_path, moment)
+        app.state.sandbox.request_logger = RequestLogger(log_path)
     app.add_middleware(SandboxMiddleware)
     return app

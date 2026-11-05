@@ -192,7 +192,7 @@ def build_seed(now: datetime) -> SandboxData:
             ],
         }
         booked_at = start - timedelta(days=2)
-        trail = [("Booked", "advisor@garageflow.local", booked_at, None)]
+        trail: list[tuple[str, str, datetime, str | None]] = [("Booked", "advisor@garageflow.local", booked_at, None)]
         flow = {
             "CheckedIn": ["CheckedIn"],
             "InInspection": ["CheckedIn", "InInspection"],

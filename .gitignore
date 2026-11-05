@@ -5,3 +5,7 @@ __pycache__/
 .env
 dist/
 *.egg-info/
+sandbox-logs/
+logs/
+migration-plan.json
+migration-ledger.json

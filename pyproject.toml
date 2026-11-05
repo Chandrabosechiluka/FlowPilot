@@ -1,6 +1,6 @@
 [project]
 name = "flowpilot"
-version = "0.1.0"
+version = "0.2.0"
 description = "An AI support and integration copilot deployed into an auto-service business that runs GarageFlow."
 readme = "README.md"
 authors = [{ name = "Chandra Bose Chiluka" }]
@@ -12,12 +12,18 @@ dependencies = [
     "python-dotenv>=1.2",   # reads .env in development
     "starlette>=1.7",       # the fake GarageFlow sandbox (FastAPI is built on Starlette)
     "uvicorn>=0.54",        # runs the sandbox and the MCP server over HTTP
-    "tzdata>=2026.6",
+    "tzdata>=2025.2",       # time-zone database: Windows has none, so ZoneInfo("Asia/Kolkata") needs this
+    "numpy>=2.0",           # vector maths for the in-memory knowledge index
 ]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]  # only for VECTOR_STORE=pgvector: uv sync --extra postgres
 
 [project.scripts]
 flowpilot-mcp = "flowpilot.mcp_server.__main__:main"
 flowpilot-sandbox = "flowpilot.sandbox.__main__:main"
+flowpilot-kb = "flowpilot.knowledge.__main__:main"
+flowpilot-migrate = "flowpilot.migration.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=9", "anyio>=4.15"]

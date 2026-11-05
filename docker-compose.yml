@@ -1,0 +1,27 @@
+# Optional infrastructure for FlowPilot. Nothing here is needed for the default (in-memory) setup.
+#
+#   docker compose up -d postgres     PostgreSQL 16 with the pgvector extension, on localhost:5433
+#
+# Then: uv sync --extra postgres, and in .env: VECTOR_STORE=pgvector
+#       DATABASE_URL=postgresql://flowpilot:flowpilot@localhost:5433/flowpilot
+# Port 5433, not 5432, so it does not clash with a PostgreSQL you may already have.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: flowpilot-postgres
+    environment:
+      POSTGRES_USER: flowpilot
+      POSTGRES_PASSWORD: flowpilot   # local development only
+      POSTGRES_DB: flowpilot
+    ports:
+      - "5433:5432"
+    volumes:
+      - flowpilot-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowpilot -d flowpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  flowpilot-pgdata:

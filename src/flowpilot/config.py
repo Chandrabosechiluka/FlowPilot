@@ -70,3 +70,51 @@ def load_settings(*, dotenv: bool = True) -> Settings:
         max_retries=retries,
         shop_timezone=tz,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSettings:
+    """Settings for the knowledge base and log search. All optional: the defaults work offline."""
+
+    knowledge_dir: str = "knowledge"
+    embeddings_provider: str = "hash"  # hash | ollama | openai
+    embedding_model: str | None = None
+    ollama_url: str = "http://localhost:11434"
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+    vector_store: str = "memory"  # memory | pgvector
+    database_url: str | None = None
+    log_file: str | None = None  # GarageFlow's console log, e.g. saved with `docker logs -t garageflow-api`
+
+    def __repr__(self) -> str:
+        key = "***" if self.openai_api_key else None
+        return (
+            f"KnowledgeSettings(knowledge_dir={self.knowledge_dir!r}, embeddings_provider={self.embeddings_provider!r}, "
+            f"embedding_model={self.embedding_model!r}, vector_store={self.vector_store!r}, "
+            f"openai_api_key={key!r}, log_file={self.log_file!r})"
+        )
+
+
+def load_knowledge_settings(*, dotenv: bool = True) -> KnowledgeSettings:
+    if dotenv:
+        load_dotenv(find_dotenv(usecwd=True))
+    env = os.environ
+    provider = env.get("EMBEDDINGS_PROVIDER", "hash").strip().lower()
+    store = env.get("VECTOR_STORE", "memory").strip().lower()
+    if provider not in {"hash", "ollama", "openai"}:
+        raise ConfigError(f"EMBEDDINGS_PROVIDER must be hash, ollama or openai, not {provider!r}")
+    if store not in {"memory", "pgvector"}:
+        raise ConfigError(f"VECTOR_STORE must be memory or pgvector, not {store!r}")
+    if store == "pgvector" and not env.get("DATABASE_URL"):
+        raise ConfigError("VECTOR_STORE=pgvector needs DATABASE_URL")
+    return KnowledgeSettings(
+        knowledge_dir=env.get("KNOWLEDGE_DIR", "knowledge"),
+        embeddings_provider=provider,
+        embedding_model=env.get("EMBEDDING_MODEL") or None,
+        ollama_url=env.get("OLLAMA_URL", "http://localhost:11434"),
+        openai_base_url=env.get("OPENAI_BASE_URL") or None,
+        openai_api_key=env.get("OPENAI_API_KEY") or None,
+        vector_store=store,
+        database_url=env.get("DATABASE_URL") or None,
+        log_file=env.get("GARAGEFLOW_LOG_FILE") or None,
+    )

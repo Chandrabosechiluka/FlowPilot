@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx2 as httpx
 import pytest
@@ -12,12 +13,16 @@ from mcp import Client
 
 from flowpilot.config import Settings
 from flowpilot.garageflow import GarageFlowClient
+from flowpilot.knowledge import HashingEmbedder, KnowledgeBase, MemoryStore
+from flowpilot.logs import LogStore
 from flowpilot.mcp_server import create_server
 from flowpilot.sandbox import SandboxState, create_app
 
 # 12:00 in Hyderabad. Seed data and "now" are pinned so every run sees the same data.
 NOW = datetime(2026, 11, 4, 6, 30, tzinfo=timezone.utc)
 BASE_URL = "http://garageflow.test"
+ROOT = Path(__file__).resolve().parent.parent
+KNOWLEDGE_DIR = ROOT / "knowledge"
 
 
 @pytest.fixture
@@ -26,8 +31,25 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def sandbox():
-    return create_app(now=NOW)
+def log_file(tmp_path) -> Path:
+    return tmp_path / "garageflow.log"
+
+
+@pytest.fixture
+def sandbox(log_file):
+    return create_app(now=NOW, log_path=log_file)
+
+
+@pytest.fixture
+async def knowledge() -> KnowledgeBase:
+    kb = KnowledgeBase(MemoryStore(), HashingEmbedder())
+    await kb.ingest(KNOWLEDGE_DIR)
+    return kb
+
+
+@pytest.fixture
+def logs(log_file, sandbox) -> LogStore:  # depends on sandbox: it writes the file
+    return LogStore(log_file)
 
 
 @pytest.fixture
@@ -68,20 +90,20 @@ async def admin_gf(sandbox, sleeps) -> AsyncIterator[GarageFlowClient]:
         yield client
 
 
-async def _mcp(client: GarageFlowClient) -> AsyncIterator[Client]:
-    server = create_server(client=client)
+async def _mcp(client: GarageFlowClient, knowledge: KnowledgeBase, logs: LogStore) -> AsyncIterator[Client]:
+    server = create_server(client=client, knowledge=knowledge, logs=logs)
     server.runtime.now = lambda: NOW
     async with Client(server) as mcp_client:
         yield mcp_client
 
 
 @pytest.fixture
-async def mcp(gf) -> AsyncIterator[Client]:
-    async for c in _mcp(gf):
+async def mcp(gf, knowledge, logs) -> AsyncIterator[Client]:
+    async for c in _mcp(gf, knowledge, logs):
         yield c
 
 
 @pytest.fixture
-async def admin_mcp(admin_gf) -> AsyncIterator[Client]:
-    async for c in _mcp(admin_gf):
+async def admin_mcp(admin_gf, knowledge, logs) -> AsyncIterator[Client]:
+    async for c in _mcp(admin_gf, knowledge, logs):
         yield c
